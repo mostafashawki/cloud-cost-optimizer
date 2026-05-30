@@ -70,3 +70,8 @@ __pypackages__/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Project
+app.db
+*.sqlite
+*.sqlite3
