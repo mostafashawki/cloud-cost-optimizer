@@ -1,6 +1,17 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+
+from app.db import init_db
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    init_db()
+    yield
 
 
 def create_app() -> FastAPI:
@@ -12,6 +23,7 @@ def create_app() -> FastAPI:
             "Detects orphaned/idle resources and emits decommission CLI command strings. "
             "Never authenticates to a cloud account."
         ),
+        lifespan=lifespan,
     )
 
     @app.get("/health", tags=["meta"])
