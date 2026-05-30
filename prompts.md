@@ -189,3 +189,36 @@ Run tests, update prompts.md, commit, report elapsed time.
 - Two iterations: first pass had 6 ruff B008 errors (FastAPI `Depends(get_db)` / `File(...)` / `Form(...)` in argument defaults). Rewrote the router with `Annotated[T, Depends(...)]` / `Annotated[T, File()]` / `Annotated[T, Form()]` and a `DbSession` alias. Tests stayed unchanged.
 - `pytest`: **55 passed, 1 warning in 0.28s**. `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t6): API end-to-end — POST /scans multipart → ingest/detect/persist → summary + findings + aggregations`.
+
+## Turn 9 — Task 7: Expand the rule catalog
+
+```
+Implement the remaining rules in SPEC §5 (#2-#6): aws_idle_stopped_ec2, aws_unassociated_elastic_ip,
+aws_orphaned_snapshot, azure_unattached_managed_disk, azure_deallocated_vm. Each registered in
+REGISTRY, each with its remediation template added to app/remediation.py. Use the finops-domain
+skill for every condition, savings calc, and command template. For date-threshold rules, inject a
+reference 'today' so logic is testable. Use python-implementer, then test-author.
+Run tests, update prompts.md, commit, report elapsed time.
+```
+
+- Updated the `Rule` Protocol + `run_engine` to thread an injected `today: date | None = None` through every rule call. Production code path (services.run_scan) passes nothing → rules fall back to `date.today()`; tests pass `today=date(2026, 5, 30)` (the pinned sample-data anchor) for hermetic date-threshold assertions.
+- Added 5 new rule classes to `app/rules/catalog.py` — all frozen+slotted dataclasses implementing the Rule Protocol via a small `__call__(self, resource, *, today=None) -> Finding | None`:
+  - **`AwsIdleStoppedEc2`** (medium, threshold 30d) — `provider=aws, type=ec2_instance, status=stopped`, age > 30d.
+  - **`AwsUnassociatedElasticIp`** (high, no date threshold) — `type=elastic_ip, status=unassociated`. Severity high because EIPs bleed money continuously and releasing is trivially safe.
+  - **`AwsOrphanedSnapshot`** (low, threshold 90d) — `type=ebs_snapshot, attached=false`, age > 90d. Severity low: snapshots are individually cheap but they accumulate.
+  - **`AzureUnattachedManagedDisk`** (high, no date threshold).
+  - **`AzureDeallocatedVm`** (medium, threshold 30d).
+  - Shared helper `_age_in_days(resource, today)` returns None when `last_activity_date is None` — date-threshold rules treat that as "can't determine age, don't flag" rather than raising. The remediation template table from T5 already covers all six rule_ids, so this turn touched only `catalog.py` (and tests).
+- Registered all six rules via consecutive `register(...)` calls at the bottom of `catalog.py`. The duplicate-`rule_id` guard from T4 catches copy-paste mistakes immediately.
+- Extended `tests/test_rules.py` to **20 tests** total:
+  - Two parametrized tests with 6 cases each — `test_rule_fires_on_orphan_with_expected_severity_and_savings` and `test_rule_does_not_fire_on_near_miss`. Each negative case is a deliberate near-miss (wrong status, wrong type, or age below threshold) so the gates are tested individually.
+  - **Boundary test**: snapshot exactly at 90d does NOT fire (rule uses strict `>`), snapshot at 91d does. Locks in the `>` vs `>=` decision.
+  - **Missing-date guard**: parametrized over the three date-threshold rules; a resource with `last_activity_date=None` is silently skipped, not crashed.
+  - Updated engine-source inspection: now asserts none of the **six** rule_ids appears literally in `base.py` — direct evidence T7 didn't break T4's rule-agnostic engine invariant.
+  - End-to-end on the *real* sample CSVs: every rule fires exactly once on its planted orphan id (matched verbatim against `data/EXPECTED.md`), exactly 6 findings total, grand-total savings == **$90.91** (T7 acceptance).
+- Updated `tests/test_api.py`:
+  - AWS POST → `resource_count == 8`, `finding_count == 4`, `total_monthly_savings == $43.15`, exact `by_resource_type` `{ebs_volume:12.00, ec2_instance:25.00, elastic_ip:3.65, ebs_snapshot:2.50}`, exact `by_severity` `{high:2, medium:1, low:1}`.
+  - New: Azure POST → 4 resources, 2 findings, $47.76, `{managed_disk:5.76, virtual_machine:42.00}`, `{high:1, medium:1}`.
+  - Determinism: documented in the module docstring that wall-clock `today` is fine here because every planted orphan's `last_activity_date` is offset from 2026-05-30 such that thresholds hold for any real today ≥ that date.
+- `pytest`: **69 passed, 1 warning in 0.41s** (up from 55: 14 new tests). `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t7): rules #2-#6 (5 more rules) + injectable today + full-sample integration tests`.

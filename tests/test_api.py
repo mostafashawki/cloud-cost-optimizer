@@ -9,10 +9,16 @@ The full flow asserted here:
   GET /scans/{id}/summary
     -> by_resource_type and by_severity aggregations correct
 
-T6 only registers the EBS rule, so for this turn the expected finding count
-is 1 (and total_monthly_savings == $12.00). T7 will turn on rules 2-6 and
-should keep these tests passing — the assertions are written to tolerate
-"at least the EBS finding" for fields where exact equality would break in T7.
+With all six SPEC §5 rules active (T7), the AWS sample produces 4 findings
+totalling $43.15 and the Azure sample produces 2 findings totalling $47.76 —
+those exact numbers are asserted below, per `data/EXPECTED.md`.
+
+Note on `today`: rules read the wall clock when no `today` is injected, and
+the API doesn't expose that knob. The planted orphan dates in
+`data/generate_samples.py` are offset from 2026-05-30 such that every
+date-threshold rule fires for any real `today` >= 2026-05-30 (i.e. the
+project's current date and beyond) — so the API tests below remain
+deterministic without freezing time.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ from fastapi.testclient import TestClient
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_AWS = PROJECT_ROOT / "data" / "sample_aws_cur.csv"
+SAMPLE_AZURE = PROJECT_ROOT / "data" / "sample_azure.csv"
 
 
 def _post_aws_sample(client: TestClient) -> dict:
@@ -32,6 +39,17 @@ def _post_aws_sample(client: TestClient) -> dict:
             "/scans",
             files={"file": ("sample_aws_cur.csv", fh, "text/csv")},
             data={"provider": "aws"},
+        )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def _post_azure_sample(client: TestClient) -> dict:
+    with SAMPLE_AZURE.open("rb") as fh:
+        response = client.post(
+            "/scans",
+            files={"file": ("sample_azure.csv", fh, "text/csv")},
+            data={"provider": "azure"},
         )
     assert response.status_code == 200, response.text
     return response.json()
@@ -53,18 +71,30 @@ def test_health_endpoint_still_works_with_db_swapped(client: TestClient) -> None
 # --------------------------------------------------------------------------- #
 
 
-def test_post_scans_returns_summary_with_positive_savings_and_known_orphan(
-    client: TestClient,
-) -> None:
+def test_post_scans_with_aws_sample_returns_full_summary(client: TestClient) -> None:
     body = _post_aws_sample(client)
 
+    # data/EXPECTED.md — AWS sample: 8 resources, 4 planted orphans (one per
+    # AWS rule), AWS subtotal $43.15.
     assert body["source_filename"] == "sample_aws_cur.csv"
     assert body["provider"] == "aws"
-    assert body["resource_count"] == 8  # data/EXPECTED.md
-    assert body["finding_count"] >= 1  # at least the EBS orphan; T7 raises this
-    assert body["total_monthly_savings"] > 0
+    assert body["resource_count"] == 8
+    assert body["finding_count"] == 4
+    assert body["total_monthly_savings"] == pytest.approx(43.15, abs=0.01)
     assert isinstance(body["scan_id"], int)
     assert "created_at" in body
+
+
+def test_post_scans_with_azure_sample_returns_full_summary(client: TestClient) -> None:
+    body = _post_azure_sample(client)
+
+    # data/EXPECTED.md — Azure sample: 4 resources, 2 planted orphans
+    # (one per Azure rule), Azure subtotal $47.76.
+    assert body["source_filename"] == "sample_azure.csv"
+    assert body["provider"] == "azure"
+    assert body["resource_count"] == 4
+    assert body["finding_count"] == 2
+    assert body["total_monthly_savings"] == pytest.approx(47.76, abs=0.01)
 
 
 def test_post_scans_rejects_unknown_provider_with_400(client: TestClient) -> None:
@@ -169,18 +199,39 @@ def test_findings_for_missing_scan_returns_404(client: TestClient) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_summary_aggregates_by_resource_type_and_severity(client: TestClient) -> None:
+def test_aws_summary_aggregates_by_resource_type_and_severity(client: TestClient) -> None:
     created = _post_aws_sample(client)
 
     response = client.get(f"/scans/{created['scan_id']}/summary")
     assert response.status_code == 200
     body = response.json()
 
-    # Only the EBS rule is wired in T6, so the aggregations are predictable:
-    # one ebs_volume orphan, severity "high", $12.00 savings.
-    assert body["total_monthly_savings"] == pytest.approx(12.00)
-    assert body["by_resource_type"] == {"ebs_volume": pytest.approx(12.00)}
-    assert body["by_severity"] == {"high": 1}
+    # Per data/EXPECTED.md with all six rules active.
+    assert body["total_monthly_savings"] == pytest.approx(43.15, abs=0.01)
+    assert body["by_resource_type"] == {
+        "ebs_volume": pytest.approx(12.00),
+        "ec2_instance": pytest.approx(25.00),
+        "elastic_ip": pytest.approx(3.65),
+        "ebs_snapshot": pytest.approx(2.50),
+    }
+    # EBS + EIP are high; stopped EC2 is medium; orphaned snapshot is low.
+    assert body["by_severity"] == {"high": 2, "medium": 1, "low": 1}
+
+
+def test_azure_summary_aggregates_by_resource_type_and_severity(client: TestClient) -> None:
+    created = _post_azure_sample(client)
+
+    response = client.get(f"/scans/{created['scan_id']}/summary")
+    assert response.status_code == 200
+    body = response.json()
+
+    assert body["total_monthly_savings"] == pytest.approx(47.76, abs=0.01)
+    assert body["by_resource_type"] == {
+        "managed_disk": pytest.approx(5.76),
+        "virtual_machine": pytest.approx(42.00),
+    }
+    # Unattached disk is high; deallocated VM is medium.
+    assert body["by_severity"] == {"high": 1, "medium": 1}
 
 
 def test_summary_for_missing_scan_returns_404(client: TestClient) -> None:
