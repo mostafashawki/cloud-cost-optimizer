@@ -87,3 +87,26 @@ Write tests, run them, update prompts.md, commit, report elapsed time.
 - Wrote `tests/test_samples.py` — 11 deterministic tests using a `tmp_path` fixture so the test never touches the committed CSVs: row counts match EXPECTED.md exactly; every planted orphan ID is present; AWS subtotal == $43.15, Azure subtotal == $47.76, grand total == $90.91 (asserted with `pytest.approx(..., abs=0.01)`); every planted orphan carries the status its rule keys on; every clean row carries a state that no rule triggers on (guards against future false positives).
 - `pytest`: **14 passed, 1 warning in 0.53s**. `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t2): synthetic sample data + planted-orphan contract`.
+
+## Turn 5 — Task 3: Ingestion / parsers
+
+```
+Implement app/ingestion/aws_cur.py and app/ingestion/azure.py. Each takes a file path (or bytes)
+and returns list[NormalizedResource] (see @app/ingestion/normalize.py) mapping provider-specific
+rows to the normalized model (status, attached, monthly_cost, last_activity_date, tags, raw).
+Use the finops-domain skill for the correct source columns (cost from UnblendedCost, not usage).
+Count and report malformed rows rather than crashing. Use python-implementer, then test-author.
+Run tests, update prompts.md, commit, report elapsed time.
+```
+
+- Added `app/ingestion/_parsing.py` — shared parser building blocks: `ParseResult` dataclass (`resources`, `malformed_count`, `errors`), `open_text(source)` that accepts `str | bytes | Path | IO[str]` (so the same parser entry-point serves CLI users, FastAPI `UploadFile` bytes, and inline-string tests), `parse_bool` with a strict truthy-token set, `parse_optional_date` (empty → None, malformed → ValueError so the row is counted), `parse_kv_pairs(value, *, kv_sep)` (one helper for both `k=v;k=v` AWS and `k:v;k:v` Azure tag formats), and a `check_required_columns(...)` precondition that returns a schema-error `ParseResult` instead of raising.
+- Implemented `app/ingestion/aws_cur.py` — `parse(source) -> ParseResult` mapping `lineItem/ResourceId` → `resource_id`, `lineItem/UnblendedCost` → `monthly_cost` (per finops-domain skill: **cost is UnblendedCost, never UsageAmount** — using usage as cost is the classic CUR bug), `product/region` → `region`, plus the extended `resource/type|status|attached|last_activity_date|tags` columns to the corresponding `NormalizedResource` fields. Full source row is preserved in `raw`. Bad rows (empty resource id, unparseable cost, malformed date) are caught with `except (ValueError, KeyError)`, counted, and logged via `logging` — never raised. Error messages use spreadsheet-style 1-based row numbers (header is row 1, data starts at row 2).
+- Implemented `app/ingestion/azure.py` — mirror of the AWS parser but reading `ResourceId`, `CostInBillingCurrency`, `ResourceLocation`, and the extended `ResourceType|ResourceStatus|Attached|LastActivityDate|Tags` columns. Tags use `:` as the key/value separator (Azure portal convention). `provider="azure"` is hard-coded.
+- Wrote `tests/test_ingestion.py` — 13 tests covering everything the playbook required *and* the T3 acceptance criteria:
+  - Inline tiny CSV fixtures both providers → counts + per-field mapping assertions (provider, type, region, status, monthly_cost, attached, last_activity_date, tags).
+  - Both `_skips_malformed_row_and_keeps_going` tests insert a deliberately bad row between two valid rows; result asserts `malformed_count == 1`, an error mentioning `row 3`, and the two valid resources still surface (i.e. **bad data is not fatal**).
+  - Acceptance: `aws_cur.parse(data/sample_aws_cur.csv)` returns 8 resources, `azure.parse(data/sample_azure.csv)` returns 4, `vol-0unattachedebs00001` parses with `status="available"` and `monthly_cost == $12.00`, `disk-unattached-demo-001` parses with `status="unattached"` and `monthly_cost == $5.76`.
+  - Edge cases: empty file → schema error not crash; missing required columns → schema error; bytes / Path / pre-opened stream all accepted; date column empty → None; tags `k=v;k=v` and `k:v;k:v` parse to identical dict shapes.
+- First run had **2 failures** in the malformed-row tests — I'd accidentally passed the CSV as a `str` to `parse(...)`, which `open_text` interprets as a file path. Fixed the tests to pass `.encode("utf-8")` (one-line change per test, no parser change needed). Second run: green.
+- `pytest`: **25 passed, 1 warning in 0.48s**. `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t3): AWS CUR + Azure CSV parsers with malformed-row tolerance`.
