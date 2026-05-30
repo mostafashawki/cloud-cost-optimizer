@@ -222,3 +222,37 @@ Run tests, update prompts.md, commit, report elapsed time.
   - Determinism: documented in the module docstring that wall-clock `today` is fine here because every planted orphan's `last_activity_date` is offset from 2026-05-30 such that thresholds hold for any real today ≥ that date.
 - `pytest`: **69 passed, 1 warning in 0.41s** (up from 55: 14 new tests). `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t7): rules #2-#6 (5 more rules) + injectable today + full-sample integration tests`.
+
+## Turn 10 — Task 8: Dashboard
+
+```
+Implement static/index.html (vanilla JS + Chart.js via CDN) and serve it at GET / per SPEC §7:
+file picker + provider select + Scan button (POST /scans), then KPI cards (total monthly savings,
+# findings, # high severity), a bar chart of savings by resource_type, and a findings table with a
+Copy button per remediation command. Match the response shape in @app/schemas.py. Keep it clean,
+no build step. Use python-implementer.
+Add a light smoke test (test-author), run all tests, update prompts.md, commit, report elapsed time.
+```
+
+- Wrote `static/index.html` — single file, no build step, no framework. Inline CSS (neutral palette, KPI grid, severity colour-coding) and inline vanilla JS at the bottom. Loads Chart.js 4.4.1 via the jsdelivr CDN (`https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js`).
+- Dashboard structure:
+  - Scan form: `<input type="file">` (accept=".csv,text/csv"), `<select>` provider (aws|azure), submit button.
+  - Empty state card (shown initially with a pointer to `data/sample_aws_cur.csv`).
+  - Results section (hidden until first scan): three KPI cards — total monthly savings, finding count, high-severity count; a Chart.js bar chart of savings by resource_type; a findings table with rule_id, resource_id, region, severity, savings, command + per-row **Copy** button.
+  - Status + error message regions (`role="status"`, `role="alert"`).
+- JS flow (IIFE, no globals leaked): submit → POST `/scans` (multipart `file` + `provider`) → parse JSON → in parallel GET `/scans/{id}/summary` + GET `/scans/{id}/findings` → render KPIs, (re)build the Chart instance (destroying any previous one), repopulate `<tbody>`. Every rendered string goes through an `escapeHtml` helper so a malicious `resource_id` can't inject markup. Copy button delegated via document-level click listener (`data-command` attribute) using `navigator.clipboard.writeText`. HTTP errors surface in the alert region with the FastAPI `detail` if the body parses as JSON.
+- Field mapping matches `app/schemas.py` verbatim: `total_monthly_savings`, `by_resource_type`, `by_severity` from `ScanAggregations`; `rule_id`, `resource_id`, `region`, `severity`, `estimated_monthly_savings`, `remediation_command` from `FindingOut`. Renaming any of those would break this dashboard — `tests/test_dashboard.py` doesn't catch that yet, but the API tests assert the same field names.
+- Wired `GET /` in `app/main.py` — `FileResponse(static/index.html, media_type="text/html")`, `include_in_schema=False` (it's not part of the JSON API surface). Defensive 404 if the file isn't installed.
+- Removed the now-obsolete `static/.gitkeep`.
+- Wrote `tests/test_dashboard.py` — **4 smoke tests** that lock the JS↔HTML contract without booting a browser:
+  - `GET /` → 200 + `Content-Type` starts with `text/html`.
+  - Body contains every element ID the JS reads / writes (14 ids: form, file-input, provider-select, scan-button, status-message, error-message, empty-state, results-section, kpi-* trio, savings-chart, findings-table, findings-tbody). A rename without updating the JS now goes red instead of silently breaking.
+  - Body references the three endpoint paths the JS calls (`/scans`, `/summary`, `/findings`).
+  - Body loads Chart.js from the CDN URL (no vendored copy, no `/static` mount — so a broken CDN URL is the only way for the chart to fail, and it'd fail visibly).
+- **Live-server sanity check**: spun up `uvicorn app.main:app` on port 8765, curled the full flow.
+  - `GET /` → 200, `content-type: text/html; charset=utf-8`, 12 619 bytes.
+  - `POST /scans` with `data/sample_aws_cur.csv`, `provider=aws` → `{"scan_id":1, "resource_count":8, "finding_count":4, "total_monthly_savings":43.15, …}`.
+  - `GET /scans/1/summary` → `{"total_monthly_savings":43.15, "by_resource_type":{"ebs_volume":12.0,"ec2_instance":25.0,"elastic_ip":3.65,"ebs_snapshot":2.5}, "by_severity":{"high":2,"medium":1,"low":1}}`.
+  - Disclaimer: I can't open a browser, so I haven't visually verified the Chart.js render or clicked a Copy button. The smoke test + live curl prove the API + HTML serving work end-to-end; the JS itself is unexercised here. Operator should open `http://localhost:8000/` in a browser to confirm the chart renders.
+- `pytest`: **73 passed, 1 warning in 0.41s** (up from 69: 4 new dashboard tests). `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t8): single-file dashboard + GET / + smoke test`.
