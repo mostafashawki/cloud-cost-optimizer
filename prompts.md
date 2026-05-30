@@ -55,3 +55,35 @@ Write tests, run them, update prompts.md, commit, report elapsed time.
 - Wrote `tests/test_models.py` with a module-level in-memory SQLite `engine` fixture (`sqlite://`) so tests never touch the real `app.db`. Two tests per PLAN T1: `test_create_all_creates_tables` (inspects DB and asserts `{scans, resources, findings}` exist) and `test_insert_and_read_finding` (inserts a Scan with one Resource and one Finding via ORM relationships in a Session, commits, opens a *fresh* Session and asserts every persisted field plus the bi-directional relationship navigation).
 - `pytest`: **3 passed, 1 warning in 0.41s**. `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t1): SQLAlchemy 2.0 models + NormalizedResource + init_db lifespan`.
+
+## Turn 4 — Task 2: Synthetic sample data (the offline enabler)
+
+```
+Implement data/generate_samples.py that writes data/sample_aws_cur.csv (realistic AWS Cost &
+Usage Report columns) and data/sample_azure.csv (Azure billing export columns). Use the
+finops-domain skill for the exact column schemas and the orphan definitions. Seed BOTH with a mix
+of healthy resources AND deliberately wasteful ones that each rule in SPEC §5 will catch: at least
+one unattached EBS volume, one long-stopped EC2, one unassociated Elastic IP, one old orphaned
+snapshot (AWS); one unattached managed disk, one long-deallocated VM (Azure). Give the seeded
+orphans stable, recognisable IDs and document the expected counts/savings in data/EXPECTED.md.
+Run the generator so the files exist. Use python-implementer, then test-author.
+Write tests, run them, update prompts.md, commit, report elapsed time.
+```
+
+- Loaded the `finops-domain` skill for the AWS CUR / Azure export column schemas (`lineItem/ResourceId`, `lineItem/ProductCode`, `lineItem/UsageType`, `lineItem/UsageAmount`, `lineItem/UnblendedCost`, `product/region`, `bill/BillingPeriodStartDate` on the AWS side; `Date`, `ResourceId`, `MeterCategory`, `ResourceGroup`, `ResourceLocation`, `Quantity`, `CostInBillingCurrency` on the Azure side).
+- Wrote `data/generate_samples.py` — fully deterministic (no RNG; `TODAY = date(2026, 5, 30)` is a module constant so age-threshold rules R2/R4/R6 are reproducible). Real CUR/Azure columns are extended with a small set of `resource/*` / `Resource*` state columns (`resource/status`, `resource/attached`, `resource/last_activity_date`, `resource/tags` and Azure analogues) so the parsers can produce a complete `NormalizedResource` from a single CSV per provider, without a separate inventory JSON (SPEC §3 ships only two CSVs). Module-docstring explains the design choice.
+- Planted **6 orphans with recognisable IDs**, one per SPEC §5 rule:
+  - `vol-0unattachedebs00001` (rule 1) — $12.00
+  - `i-0longstoppedec2001`, stopped 80d ago (rule 2) — $25.00
+  - `eipalloc-0unassociated001` (rule 3) — $3.65
+  - `snap-0orphanedsnap00001`, orphaned 150d ago (rule 4) — $2.50
+  - `…/disks/disk-unattached-demo-001` (rule 5) — $5.76
+  - `…/virtualMachines/vm-deallocated-demo-001`, deallocated 60d ago (rule 6) — $42.00
+  - **Grand total monthly savings: $90.91** (AWS $43.15 + Azure $47.76).
+- Planted **6 healthy resources** that must NOT trigger any rule (in-use volume, running EC2, associated EIP, recent snapshot; attached Azure disk, running Azure VM) — same files, distinguishable IDs.
+- Wrote `data/EXPECTED.md` — the planted-orphan contract: per-orphan IDs, severities, individual savings, AWS/Azure subtotals, grand total, and a rule→orphan mapping table for downstream detection tests.
+- Made `data/` a package (`data/__init__.py`) so tests can `from data.generate_samples import write_samples` without sys.path hacks (data/ is excluded from the wheel via `tool.hatch.build.targets.wheel.packages = ["app"]`). Removed the now-obsolete `data/.gitkeep`.
+- Ran the generator: `python data/generate_samples.py` → wrote `data/sample_aws_cur.csv` (8 data rows) and `data/sample_azure.csv` (4 data rows). Committed alongside the generator.
+- Wrote `tests/test_samples.py` — 11 deterministic tests using a `tmp_path` fixture so the test never touches the committed CSVs: row counts match EXPECTED.md exactly; every planted orphan ID is present; AWS subtotal == $43.15, Azure subtotal == $47.76, grand total == $90.91 (asserted with `pytest.approx(..., abs=0.01)`); every planted orphan carries the status its rule keys on; every clean row carries a state that no rule triggers on (guards against future false positives).
+- `pytest`: **14 passed, 1 warning in 0.53s**. `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t2): synthetic sample data + planted-orphan contract`.

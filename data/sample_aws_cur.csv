@@ -1,0 +1,9 @@
+bill/BillingPeriodStartDate,lineItem/ResourceId,lineItem/ProductCode,lineItem/UsageType,lineItem/UsageAmount,lineItem/UnblendedCost,product/region,resource/type,resource/status,resource/attached,resource/last_activity_date,resource/tags
+2026-05-01,vol-0unattachedebs00001,AmazonEC2,EBS:VolumeUsage.gp3,150.000,12.00,us-east-1,ebs_volume,available,false,2026-05-10,env=dev;owner=alice
+2026-05-01,i-0longstoppedec2001,AmazonEC2,BoxUsage:t3.medium,0.0,25.00,us-east-1,ec2_instance,stopped,true,2026-03-11,env=staging;owner=bob
+2026-05-01,eipalloc-0unassociated001,AmazonEC2,ElasticIP:IdleAddress,730.0,3.65,us-east-1,elastic_ip,unassociated,false,2026-04-15,
+2026-05-01,snap-0orphanedsnap00001,AmazonEC2,EBS:SnapshotUsage,50.0,2.50,us-east-1,ebs_snapshot,completed,false,2025-12-31,purpose=backup
+2026-05-01,vol-0healthyinuse00001,AmazonEC2,EBS:VolumeUsage.gp3,100.0,8.00,us-east-1,ebs_volume,in-use,true,2026-05-29,env=prod
+2026-05-01,i-0runninginst00001,AmazonEC2,BoxUsage:t3.small,730.0,30.00,us-east-1,ec2_instance,running,true,2026-05-30,env=prod;owner=carol
+2026-05-01,eipalloc-0associated001,AmazonEC2,ElasticIP:InUseAddress,730.0,0.00,us-east-1,elastic_ip,associated,true,2026-05-30,
+2026-05-01,snap-0recentsnap00001,AmazonEC2,EBS:SnapshotUsage,40.0,2.00,us-east-1,ebs_snapshot,completed,true,2026-05-20,purpose=backup
