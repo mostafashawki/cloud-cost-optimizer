@@ -163,3 +163,29 @@ Run tests, update prompts.md, commit, report elapsed time.
   - **Safety / source-inspection** test: parses `app/remediation.py` with `ast.parse(...)`, walks `ast.Import` + `ast.ImportFrom` nodes, and asserts none has a top-level module name in `{"boto3", "botocore", "azure", "subprocess", "os.system"}`. AST parsing instead of substring grep means the forbidden words can still appear in the module's *docstring* (where the safety contract is documented) without flunking the test — only actual import statements fail it.
 - `pytest`: **43 passed, 1 warning in 0.51s**. `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t5): remediation command generator + safety/source-inspection test`.
+
+## Turn 8 — Task 6: API end-to-end (vertical slice through the API)
+
+```
+Implement app/services.py run_scan(file_bytes, filename, provider) that ingests -> runs the engine
+-> generates remediation strings -> persists Scan/Resources/Findings -> returns a ScanSummary.
+Wire the API per SPEC §6: POST /scans (multipart), GET /scans, GET /scans/{id},
+GET /scans/{id}/findings, GET /scans/{id}/summary. pydantic schemas in app/schemas.py.
+Only the EBS rule is active so far — that's fine. Use python-implementer, then test-author.
+Run tests, update prompts.md, commit, report elapsed time.
+```
+
+- Implemented `app/schemas.py` — Pydantic v2 models: `ScanSummary` (with explicit `from_scan(scan)` classmethod that maps ORM `id` → `scan_id` per SPEC §6 naming), `FindingOut` (with `from_orm_finding(f)` that joins `resource_id`/`resource_type`/`provider`/`region` from the related Resource row so the dashboard doesn't need a second hop), `ScanAggregations` (`total_monthly_savings`, `by_resource_type`, `by_severity`). `Provider` and `Severity` are `Literal` types so JSON serialization stays type-safe.
+- Implemented `app/services.py` — single orchestration entry point `run_scan(db, *, file_bytes, filename, provider) -> Scan`. Steps: parser lookup (`UnknownProviderError` if not aws/azure) → parse → `IngestionError` if zero usable resources (empty file / bad schema) → `run_engine` → `generate_remediation` per finding → persist one Scan + N Resources + M Findings, committing once at the end so a mid-stream failure leaves no partial scan. Resource ORM rows are indexed by `resource_id` so Findings link back without a second query.
+- Implemented `app/api/scans.py` — five routes per SPEC §6 (POST /scans multipart, GET /scans, GET /scans/{id}, GET /scans/{id}/findings, GET /scans/{id}/summary). Used the modern `Annotated[Session, Depends(get_db)]` DI pattern via a `DbSession` type alias (avoids ruff B008 "function call in argument default" and is the FastAPI 0.95+ recommendation). 400 on unknown provider / empty file / parser schema error; 404 on missing scan.
+- Wired the router into `app/main.py` and added a top-level `import app.rules.catalog` so the REGISTRY is populated at app construction time (no first-request race).
+- Wrote `tests/conftest.py` — two fixtures: `isolated_db` swaps `app.db.engine` + `app.db.SessionLocal` for a per-test `tmp_path` SQLite via `monkeypatch` and calls `init_db()` against the new engine; `client` builds a `TestClient(app)` used as a context manager so the FastAPI `lifespan` actually fires (which re-calls `init_db()` against the monkey-patched engine — same code path as production). Real `<repo>/app.db` is never touched in tests.
+- Wrote `tests/test_api.py` — **11 tests** covering the full flow:
+  - POST sample → `resource_count == 8`, `finding_count >= 1`, `total_monthly_savings > 0`, ScanSummary fields present.
+  - 400 on unknown provider, 400 on empty file, 400 on CSV with missing columns.
+  - GET /scans returns the just-created scan; GET /scans/{id} returns it; 404 on missing.
+  - **Acceptance**: `vol-0unattachedebs00001` appears in `/findings` with `rule_id == "aws_unattached_ebs_volume"`, severity `high`, savings `$12.00`, and the exact remediation command `aws ec2 delete-volume --volume-id vol-0unattachedebs00001 --region us-east-1`.
+  - `/summary` aggregations are exact: `by_resource_type == {"ebs_volume": 12.00}`, `by_severity == {"high": 1}`, `total_monthly_savings == 12.00` (will grow in T7 when rules 2-6 activate).
+- Two iterations: first pass had 6 ruff B008 errors (FastAPI `Depends(get_db)` / `File(...)` / `Form(...)` in argument defaults). Rewrote the router with `Annotated[T, Depends(...)]` / `Annotated[T, File()]` / `Annotated[T, Form()]` and a `DbSession` alias. Tests stayed unchanged.
+- `pytest`: **55 passed, 1 warning in 0.28s**. `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t6): API end-to-end — POST /scans multipart → ingest/detect/persist → summary + findings + aggregations`.

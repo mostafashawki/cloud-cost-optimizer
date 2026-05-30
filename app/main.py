@@ -5,6 +5,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+# Importing the rules catalog has the side-effect of populating REGISTRY.
+# Done once at app construction time so every request sees the same set
+# of registered rules without races on first hit.
+import app.rules.catalog  # noqa: F401
+from app.api import scans as scans_routes
 from app.db import init_db
 
 
@@ -30,6 +35,7 @@ def create_app() -> FastAPI:
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    app.include_router(scans_routes.router)
     return app
 
 
