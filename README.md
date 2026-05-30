@@ -31,36 +31,59 @@ $90.91 / month** — every planted orphan is detailed in
 
 ## Architecture
 
-```mermaid
-flowchart LR
-  CSV["AWS CUR CSV / Azure export CSV"] --> Parsers["app/ingestion/&#123;aws_cur,azure&#125;.py"]
-  Parsers -->|list[NormalizedResource]| Engine["app/rules/base.run_engine"]
-  Catalog["app/rules/catalog.py<br/>(R1..R6, registered in REGISTRY)"] -.-> Engine
-  Engine -->|list[Finding]| Remediation["app/remediation.generate"]
-  Remediation -->|command string| Services["app/services.run_scan"]
-  Parsers --> Services
-  Services -->|persist| DB["SQLite via SQLAlchemy 2.0<br/>Scan / Resource / Finding"]
-  Services -->|ScanSummary| API["FastAPI routes<br/>POST /scans, GET /scans/&#123;id&#125;/{findings,summary}"]
-  API --> Dash["static/index.html<br/>(KPIs + Chart.js bar + Copy button)"]
-  API --> JSON["Any JSON client"]
 ```
-
-ASCII version for terminals without mermaid:
-
-```
-exported CSV ──► parsers ──► list[NormalizedResource]
-                                   │
-                                   ▼
-                       run_engine ──► list[Finding]
-                          ▲                 │
-                          │                 ▼
-                       REGISTRY     remediation.generate
-                       (R1..R6)            │
-                                           ▼
-                                services.run_scan ──► SQLite (Scan/Resource/Finding)
-                                           │
-                                           ▼
-                                  FastAPI JSON ──► dashboard at GET /
+   ┌──────────────────────────────────┐
+   │  Exported billing CSV            │
+   │  (AWS CUR  or  Azure export)     │
+   └───────────────┬──────────────────┘
+                   │
+                   ▼
+   ┌──────────────────────────────────┐
+   │  app/ingestion/{aws_cur,azure}   │
+   │  parse() → list[NormalizedResource]
+   └───────────────┬──────────────────┘
+                   │
+                   │  list[NormalizedResource]
+                   ▼
+   ┌──────────────────────────────────┐       ┌──────────────────────────────┐
+   │  app/rules/base.run_engine       │ ◄─────┤  app/rules/catalog           │
+   │  iterates REGISTRY               │       │  R1..R6 register(...) at     │
+   │                                  │       │  import time                 │
+   └───────────────┬──────────────────┘       └──────────────────────────────┘
+                   │  list[Finding]
+                   ▼
+   ┌──────────────────────────────────┐
+   │  app/remediation.generate        │
+   │  finding  →  CLI command string  │
+   │  (no boto3 / azure / subprocess) │
+   └───────────────┬──────────────────┘
+                   │  command + is_destructive
+                   ▼
+   ┌──────────────────────────────────┐       ┌──────────────────────────────┐
+   │  app/services.run_scan           │──────►│  SQLite via SQLAlchemy 2.0    │
+   │  orchestrates everything above   │       │  Scan / Resource / Finding   │
+   └───────────────┬──────────────────┘       └──────────────────────────────┘
+                   │  ScanSummary
+                   ▼
+   ┌──────────────────────────────────┐
+   │  FastAPI routes (app/api/scans)  │
+   │  POST /scans                     │
+   │  GET  /scans                     │
+   │  GET  /scans/{id}                │
+   │  GET  /scans/{id}/findings       │
+   │  GET  /scans/{id}/summary        │
+   └───────────────┬──────────────────┘
+                   │
+       ┌───────────┴────────────┐
+       ▼                        ▼
+ ┌──────────────────┐   ┌────────────────────┐
+ │  GET /           │   │  Any JSON client    │
+ │  static/         │   │  (curl, scripts)    │
+ │  index.html      │   └────────────────────┘
+ │  (KPI cards +    │
+ │   Chart.js bar + │
+ │   Copy button)   │
+ └──────────────────┘
 ```
 
 ---
