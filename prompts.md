@@ -139,3 +139,27 @@ Run tests, update prompts.md, commit, report elapsed time.
 - Ruff initially flagged one import-order issue; `ruff check --fix .` resolved it (single-file isort touch in the test).
 - `pytest`: **34 passed, 1 warning in 0.50s**. `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t4): rule engine + aws_unattached_ebs_volume (first vertical-slice rule)`.
+
+## Turn 7 — Task 5: Remediation command generator
+
+```
+Implement app/remediation.py: given a Finding (+ its resource), return the exact CLI command
+string per the finops-domain skill templates / SPEC §5. Map each rule_id to its template. Per the
+safety rule, this module imports no cloud SDK and executes nothing; destructive commands are marked
+is_destructive. Use python-implementer, then test-author.
+Run tests, update prompts.md, commit, report elapsed time.
+```
+
+- Implemented `app/remediation.py` carrying the full SPEC §5 template table up front (all six rules, not just EBS) so T7's rule additions don't need to touch this module:
+  - `_TEMPLATES: dict[str, _Template]` mapping `rule_id` → (`template`, `is_destructive`). Format placeholders are `{rid}` (resource id) and `{region}`; Azure templates omit `--region` and silently ignore the extra `region=...` kwarg.
+  - `RemediationCommand(command, is_destructive)` frozen dataclass returned by `generate(finding)`. Destructive-flag policy: deletes of potentially-restartable compute (`terminate-instances`, `vm delete`) are marked `True`; deletes of already-orphaned objects (unattached vol/disk, unassociated EIP, orphaned snapshot) are `False` — they cannot disrupt any live workload by definition.
+  - Unknown `rule_id` → `KeyError("no remediation template for rule_id=…")` to surface programmer errors loudly.
+  - Public helper `supported_rule_ids()` returns the set of templated rule_ids (useful for the parity test below and for catalog/template consistency in T7).
+  - **Safety contract** spelled out in the module docstring: no `boto3`, no `botocore`, no `azure-*`, no `subprocess`, no `os.system`.
+- Wrote `tests/test_remediation.py` — **9 test cases / 8 functions**:
+  - **Parametrized** "exact template" test runs 6 times (one per `rule_id`), each asserting `result.command == expected_command` byte-for-byte and `result.is_destructive` matches the expected flag (True for `aws_idle_stopped_ec2` + `azure_deallocated_vm`; False for the other four).
+  - `KeyError` raised with the rule_id in the message for an unknown finding.
+  - **Parity** test: `{case.id for case in REMEDIATION_CASES} == supported_rule_ids()` — so the suite stays in lock-step with the template dict; a future rule added to `_TEMPLATES` but forgotten in tests would fail this assertion immediately.
+  - **Safety / source-inspection** test: parses `app/remediation.py` with `ast.parse(...)`, walks `ast.Import` + `ast.ImportFrom` nodes, and asserts none has a top-level module name in `{"boto3", "botocore", "azure", "subprocess", "os.system"}`. AST parsing instead of substring grep means the forbidden words can still appear in the module's *docstring* (where the safety contract is documented) without flunking the test — only actual import statements fail it.
+- `pytest`: **43 passed, 1 warning in 0.51s**. `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t5): remediation command generator + safety/source-inspection test`.
