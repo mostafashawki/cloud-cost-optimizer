@@ -110,3 +110,32 @@ Run tests, update prompts.md, commit, report elapsed time.
 - First run had **2 failures** in the malformed-row tests — I'd accidentally passed the CSV as a `str` to `parse(...)`, which `open_text` interprets as a file path. Fixed the tests to pass `.encode("utf-8")` (one-line change per test, no parser change needed). Second run: green.
 - `pytest`: **25 passed, 1 warning in 0.48s**. `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t3): AWS CUR + Azure CSV parsers with malformed-row tolerance`.
+
+## Turn 6 — Task 4: Rule engine + FIRST rule (vertical slice)
+
+```
+Implement app/rules/base.py: a Rule protocol, the Finding dataclass, and a REGISTRY the engine
+iterates. Implement ONLY the first rule in app/rules/catalog.py: aws_unattached_ebs_volume
+(SPEC §5 #1) — registered, not hard-wired into the engine. The engine takes list[NormalizedResource]
+-> list[Finding]. Use the finops-domain skill for the exact condition and savings calculation.
+Use python-implementer, then test-author.
+Run tests, update prompts.md, commit, report elapsed time.
+```
+
+- Implemented `app/rules/base.py` — engine primitives:
+  - `Severity = Literal["low","medium","high"]`.
+  - `Finding` frozen slotted dataclass (in-memory, distinct from the ORM `models.Finding`; services.run_scan in T6 will map between them). Fields: `rule_id`, `resource_id`, `resource_type`, `provider`, `region`, `title`, `reason`, `severity`, `estimated_monthly_savings`, `remediation_command` (default `""`, populated in T5).
+  - `Rule` `@runtime_checkable Protocol` requiring `rule_id`, `title`, `severity` attributes plus `__call__(resource) -> Finding | None`.
+  - `REGISTRY: dict[str, Rule]` keyed on `rule_id` (so duplicate registration raises `ValueError` instead of silently shadowing).
+  - `register(rule)` decorator-style helper.
+  - `run_engine(resources)` iterates `REGISTRY.values()` once per resource (resource-outer / rule-inner so all findings for resource A precede any for resource B — matches what `services.run_scan` will want when attaching findings to the persisted resource row).
+- Implemented **only** SPEC §5 #1 in `app/rules/catalog.py` — `AwsUnattachedEbsVolume` (frozen dataclass instance, registered via a single `register(AwsUnattachedEbsVolume())` call). Condition: `provider == "aws" and resource_type == "ebs_volume" and status == "available"`. Severity `high`. Savings = `round(resource.monthly_cost, 2)` per python-implementer's "round at the boundary" guidance. Reason string includes the resource id and the trigger status for human-readable findings.
+- Wrote `tests/test_rules.py` — **9 tests** covering:
+  - Engine/registry contract: rule is registered, satisfies the `Rule` Protocol via `isinstance` (works because the Protocol is `@runtime_checkable`); `run_engine([])` returns `[]`; **engine-source-inspection test** uses `inspect.getsource(rules_base)` to assert the literal strings `"aws_unattached_ebs_volume"` and `"azure_unattached_managed_disk"` are absent from `base.py` — direct evidence of the "adding a rule requires no engine change" acceptance criterion.
+  - Positive: unattached EBS volume → flagged with `severity=="high"`, savings == `$12.00`, every field on the `Finding` populated correctly, `remediation_command == ""` (T5 territory).
+  - Boundary: savings of `9.123456` round to `9.12`.
+  - Negative cases: in-use volume not flagged; an Azure-provider resource with `resource_type="ebs_volume"` not flagged (tests the provider gate); an EC2 instance with `status="available"` not flagged (tests the resource_type gate).
+  - Mixed input: only the one orphan is reported among `[healthy, orphan, healthy]`.
+- Ruff initially flagged one import-order issue; `ruff check --fix .` resolved it (single-file isort touch in the test).
+- `pytest`: **34 passed, 1 warning in 0.50s**. `ruff check .`: **All checks passed!**.
+- Commit landed as `feat(t4): rule engine + aws_unattached_ebs_volume (first vertical-slice rule)`.
