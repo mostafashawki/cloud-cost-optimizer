@@ -256,3 +256,42 @@ Add a light smoke test (test-author), run all tests, update prompts.md, commit, 
   - Disclaimer: I can't open a browser, so I haven't visually verified the Chart.js render or clicked a Copy button. The smoke test + live curl prove the API + HTML serving work end-to-end; the JS itself is unexercised here. Operator should open `http://localhost:8000/` in a browser to confirm the chart renders.
 - `pytest`: **73 passed, 1 warning in 0.41s** (up from 69: 4 new dashboard tests). `ruff check .`: **All checks passed!**.
 - Commit landed as `feat(t8): single-file dashboard + GET / + smoke test`.
+
+## Turn 11 — Task 9: README, run docs & the deck
+
+```
+Write README.md: what it does, architecture diagram (ASCII or mermaid), how to run
+(uv sync; python data/generate_samples.py; uvicorn app.main:app; open http://localhost:8000),
+how to run tests, the rule catalog table (from @app/rules/catalog.py), and a clear "Cloud cost /
+decommission" note: this tool is fully offline and provisions NO cloud resources, so there is
+nothing to decommission — it analyses exported billing files and only emits commands. Then generate
+the presentation as slides.md (Marp-compatible markdown): problem, architecture, how the rule engine
+works, a demo screenshot description, results (sample savings figure), and the vibe-coding workflow
+(skills + prompts.md). Update prompts.md, commit, report elapsed time.
+```
+
+- Rewrote `README.md` (replacing the T0 placeholder) with the full ship-ready version:
+  - **What it does** — capability ⇄ file table covering ingestion, rules, remediation, persistence, API, dashboard.
+  - **Architecture** — both a mermaid `flowchart LR` diagram (renders on GitHub) AND a plain ASCII pipeline for terminals without mermaid.
+  - **How to run** — `uv sync` path *and* a `pip + venv` fallback, since `uv` isn't always installed (CLAUDE.md explicitly allows the fallback). Includes `data/generate_samples.py` step and a `curl` sanity check.
+  - **Tests** — `pytest -q` + `ruff check .`; notes the suite is 73 tests, fully offline.
+  - **Rule catalog table** — all 6 rules per `app/rules/catalog.py` with rule_id, gate, severity, savings, and the verbatim command template. Destructive rules flagged.
+  - **API quick reference** — every SPEC §6 endpoint with method, path, body, response shape pointer to `app/schemas.py`.
+  - **Project layout** — annotated tree.
+  - **Cloud decommission note** — required-by-brief, prominent: "There is nothing to decommission." Explains that the remediation module is asserted SDK-free via an AST source-inspection test; running the commands is the operator's call.
+  - **Future work** — short list (Docker, M-o-M trend, tag aggregation, multi-scan diff, auth).
+- Wrote `slides.md` — Marp-compatible markdown (front-matter `marp: true`, `theme: default`, `paginate: true`, `size: 16:9`) with the 9 sections the brief asks for:
+  1. Title (cover slide via `<!-- _class: lead -->`)
+  2. The problem (manual cloud waste audits, IAM permissions friction)
+  3. Architecture (ASCII diagram)
+  4. How the rule engine works (with a code snippet of `AwsUnattachedEbsVolume`)
+  5. Detection rules implemented (SPEC §5 table)
+  6. Dashboard (ASCII mockup showing KPI cards, bar chart, findings table)
+  7. Results on sample data ($90.91 grand total table)
+  8. Vibe-coding workflow (4 skills + per-task process)
+  9. The audit log (prompts.md)
+  10. Numbers from this build (commit count, test count, 0 cloud resources, elapsed time)
+  11. Thank-you cover slide
+- Render with `marp slides.md -o slides.pdf` (or any Marp-compatible viewer).
+- No code changed; re-ran full suite as required by playbook: `pytest`: **73 passed, 1 warning in 0.42s**. `ruff check .`: **All checks passed!**.
+- Commit landed as `docs(t9): full README (architecture + rule table + decommission note) + Marp slides`.
