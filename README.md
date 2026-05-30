@@ -34,13 +34,13 @@ $90.91 / month** — every planted orphan is detailed in
 ```mermaid
 flowchart LR
   CSV["AWS CUR CSV / Azure export CSV"] --> Parsers["app/ingestion/&#123;aws_cur,azure&#125;.py"]
-  Parsers -->|NormalizedResources| Engine["app/rules/base.run_engine"]
+  Parsers -->|list[NormalizedResource]| Engine["app/rules/base.run_engine"]
   Catalog["app/rules/catalog.py<br/>(R1..R6, registered in REGISTRY)"] -.-> Engine
-  Engine -->|Findings| Remediation["app/remediation.generate"]
+  Engine -->|list[Finding]| Remediation["app/remediation.generate"]
   Remediation -->|command string| Services["app/services.run_scan"]
   Parsers --> Services
   Services -->|persist| DB["SQLite via SQLAlchemy 2.0<br/>Scan / Resource / Finding"]
-  Services -->|ScanSummary| API["FastAPI routes<br/>POST /scans, GET /scans/&#123;id&#125;/findings, /summary"]
+  Services -->|ScanSummary| API["FastAPI routes<br/>POST /scans, GET /scans/&#123;id&#125;/{findings,summary}"]
   API --> Dash["static/index.html<br/>(KPIs + Chart.js bar + Copy button)"]
   API --> JSON["Any JSON client"]
 ```
